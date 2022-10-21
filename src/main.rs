@@ -1,16 +1,19 @@
 pub mod config;
 
 use std::{
+    env,
     process::Command,
     ptr,
     sync::{Arc, RwLock},
     thread::{self, Thread},
-    time::Duration,
+    time::Duration, fs::{self, File}, io::Write,
 };
 
 use x11::xlib::{Display, XCloseDisplay, XDefaultRootWindow, XFlush, XOpenDisplay, XStoreName};
 
 fn main() {
+    let args: Vec<String> = env::args().collect();
+
     let config = config::read_config();
     let seperator = config.seperator;
     let bar = Bar::new(Seperator(seperator), thread::current());
@@ -31,9 +34,16 @@ fn main() {
 
     let display2 = display.clone();
     let bar2 = bar.clone();
-    let update_thread = thread::spawn(move || {
-        update_hander(bar2, display2);
-    });
+    let update_thread;
+    if args.contains(&"wayland".to_string()) {
+        update_thread = thread::spawn(move || {
+            wayland_update_handler(bar2);
+        });
+    } else {
+        update_thread = thread::spawn(move || {
+            update_hander(bar2, display2);
+        });
+    }
 
     bar.clone().write().unwrap().updater_handle = update_thread.thread().clone();
 
@@ -88,7 +98,7 @@ impl Bar {
         let mut s = String::new();
         for i in 0..self.output.len() {
             s += &self.output[i];
-            if i != self.output.len() {
+            if i < self.output.len() - 1 {
                 // if last element, dont add a seperator
                 s += &self.seperator.0;
             }
@@ -104,10 +114,22 @@ fn command_handler(bar: Arc<RwLock<Bar>>, command: Execute, index: usize) {
     loop {
         bar.write().unwrap().output[index] = command.run();
         bar.read().unwrap().update();
-        if command.interval.is_zero(){
+        if command.interval.is_zero() {
             break;
         }
         thread::sleep(command.interval);
+    }
+}
+
+fn wayland_update_handler(bar: Arc<RwLock<Bar>>) {
+    let path = env::var("XDG_RUNTIME_DIR").unwrap() + "/somebar-0";
+    let mut file = File::create(path).unwrap();
+    loop {
+        thread::park();
+        let output = bar.read().unwrap().get_status();
+        write!(file, "status {}\n", output).unwrap();
+        file.flush().unwrap();
+        
     }
 }
 
